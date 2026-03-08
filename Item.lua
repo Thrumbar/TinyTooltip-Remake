@@ -70,12 +70,8 @@ LibEvent:attachTrigger("tooltip:item", function(self, tip, link)
         local isModifierDown = IsShiftKeyDown() or IsControlKeyDown() or IsAltKeyDown()
         local showAllByModifier = addon.db.item.modifierShowAll
         local showItemExpansion = addon.db.item.showItemExpansion
-        if (isModifierDown) then
-            if (not showAllByModifier) then
-                showItemExpansion = false
-            else
-                showItemExpansion = true
-            end
+        if (isModifierDown and showAllByModifier) then
+            showItemExpansion = true
         end
         if (showItemExpansion) then
             local itemLink = link or (tip and select(2, tip:GetItem()))
