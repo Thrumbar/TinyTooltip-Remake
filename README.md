@@ -26,7 +26,6 @@ This remake version which based on original TinyTooltip will be carry on for oth
 ## Comming Soon:
 - These features will be implemented in the future (sooner then you expected)
     Best Mythic+ Run Dungeon
-    Spec Icon rather than just text
     Mod key for tooltip display during combat
 
 - And MORE in planning.
@@ -69,7 +68,6 @@ As I am interested in maintaining this project from now on and adding more featu
 ## 即将推出：
 - 以下功能将在未来实现（也许比你预期的要快）：
     最佳大秘境地下城
-    专精图标而不仅仅是纯文本
     使用修饰键在战斗中显示鼠标提示
 
 - 更多功能正在规划中。
