@@ -10,6 +10,11 @@ it will causing jittering due to anchor competition with blizzard UI system
 
 Quick Focus is not working when clicking Unit Frame, as Unit Frame click event is protected.
 
+## [v1.5.0] - 2026-03-15
+- Now you have the option to show Specialization, Mount, M+ Score, Achivements, Item Level with icon instead of just txt
+  To use your dessired icon for Item Level, M+ Score and Mount, copy and paste your customized icon into icon directory in this addon and rename it accordingly. 
+  Specialization and Achivements are using in-game resources therefore can not be customized.
+
 ## [v1.4.3] - 2026-03-14
 - Fixed lua errors when item link is nil
 - Fixed 'bad self' error in dungeon Murder Row
