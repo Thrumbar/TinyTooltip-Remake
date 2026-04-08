@@ -1,57 +1,76 @@
-
 local LibEvent = LibStub:GetLibrary("LibEvent.7000")
 
-local GetSpellTexture = GetSpellTexture or C_Spell.GetSpellTexture
-
 local addon = TinyTooltip
+local Util = addon.Util or {}
+local GetSpellTextureSafe = GetSpellTexture or (C_Spell and C_Spell.GetSpellTexture)
 
-local function ColorBorder(tip)
-    if (addon.db.spell.borderColor) then
-        LibEvent:trigger("tooltip.style.border.color", tip, unpack(addon.db.spell.borderColor))
+local function ResolveTooltipSpellId(tip)
+    if (not tip or type(tip.GetSpell) ~= "function") then return end
+    local _, spellId = Util.SafeCall(tip.GetSpell, tip)
+    if (type(spellId) == "number") then
+        return spellId
     end
 end
 
-local function ColorBackground(tip)
-    if (addon.db.spell.background) then
-        LibEvent:trigger("tooltip.style.background", tip, unpack(addon.db.spell.background))
+local function GetHeaderText(tip)
+    local line = addon:GetLine(tip, 1)
+    if (not line) then return end
+    return Util.GetTooltipLineText(line)
+end
+
+local function HeaderAlreadyHasIcon(tip)
+    local text = GetHeaderText(tip)
+    return type(text) == "string" and strfind(text, "^|T") ~= nil
+end
+
+local function ApplyGeneralTooltipStyle(tip)
+    local general = addon.db and addon.db.general
+    if (not general) then return end
+    LibEvent:trigger("tooltip.style.bgfile", tip, general.bgfile)
+    LibEvent:trigger("tooltip.style.border.corner", tip, general.borderCorner)
+    if (general.borderCorner == "angular") then
+        LibEvent:trigger("tooltip.style.border.size", tip, general.borderSize)
     end
 end
 
-local function SpellIcon(tip, spellId)
-    if (addon.db.spell.showIcon) then
-        local id = spellId
-        if ((not id) and tip and tip.GetSpell) then
-            local ok, _, sid = pcall(tip.GetSpell, tip)
-            if (ok and type(sid) == "number") then
-                id = sid
-            end
-        end
-        local texture = GetSpellTexture(id or 0)
-        local okText, text = pcall(function()
-            return addon:GetLine(tip,1):GetText()
-        end)
-        if (texture and okText and type(text) == "string") then
-            local okFind, found = pcall(strfind, text, "^|T")
-            if (okFind and not found) then
-                addon:GetLine(tip,1):SetFormattedText("|T%s:16:16:0:0:32:32:2:30:2:30|t %s", texture, text)
-                tip:Show()
-                if (addon.AutoSetTooltipWidth) then
-                    addon:AutoSetTooltipWidth(tip)
-                end
-            end
-        end
+local function ApplySpellTooltipStyle(tip)
+    local spellSettings = addon.db and addon.db.spell
+    if (not spellSettings) then return end
+    if (spellSettings.borderColor) then
+        LibEvent:trigger("tooltip.style.border.color", tip, unpack(spellSettings.borderColor))
+    end
+    if (spellSettings.background) then
+        LibEvent:trigger("tooltip.style.background", tip, unpack(spellSettings.background))
+    end
+end
+
+local function AddSpellIconToHeader(tip, spellId)
+    local spellSettings = addon.db and addon.db.spell
+    if (not spellSettings or not spellSettings.showIcon) then return end
+    if (not GetSpellTextureSafe) then return end
+    if (HeaderAlreadyHasIcon(tip)) then return end
+
+    local resolvedSpellId = spellId or ResolveTooltipSpellId(tip)
+    if (type(resolvedSpellId) ~= "number") then return end
+
+    local texture = Util.SafeCall(GetSpellTextureSafe, resolvedSpellId)
+    local headerText = GetHeaderText(tip)
+    if (type(texture) ~= "number" and type(texture) ~= "string") then return end
+    if (type(headerText) ~= "string" or headerText == "") then return end
+
+    addon:GetLine(tip, 1):SetFormattedText(
+        "|T%s:16:16:0:0:32:32:2:30:2:30|t %s",
+        texture,
+        headerText
+    )
+    tip:Show()
+    if (addon.AutoSetTooltipWidth) then
+        addon:AutoSetTooltipWidth(tip)
     end
 end
 
 LibEvent:attachTrigger("tooltip:spell", function(self, tip, spellId)
-    if (addon.db and addon.db.general) then
-        LibEvent:trigger("tooltip.style.bgfile", tip, addon.db.general.bgfile)
-        LibEvent:trigger("tooltip.style.border.corner", tip, addon.db.general.borderCorner)
-        if (addon.db.general.borderCorner == "angular") then
-            LibEvent:trigger("tooltip.style.border.size", tip, addon.db.general.borderSize)
-        end
-    end
-    SpellIcon(tip, spellId)
-    ColorBorder(tip)
-    ColorBackground(tip)
+    ApplyGeneralTooltipStyle(tip)
+    AddSpellIconToHeader(tip, spellId)
+    ApplySpellTooltipStyle(tip)
 end)

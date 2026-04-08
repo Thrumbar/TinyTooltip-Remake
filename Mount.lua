@@ -1,53 +1,66 @@
-
 local LibEvent = LibStub:GetLibrary("LibEvent.7000")
 local LibSchedule = LibStub:GetLibrary("LibSchedule.7000")
 
 local addon = TinyTooltip
 local L = addon.L or {}
-local mounts = {}
+local mountCache = {}
 
-if (not C_MountJournal) then return end
+if (not C_MountJournal) then
+    return
+end
 
-local function GetAllMountSource()
-    local mountIDs = C_MountJournal.GetMountIDs()
-    local name, spellID, isCollected, source
-    for i, mountID in ipairs(mountIDs) do
-        name, spellID, _, _, _, _, _, _, _, _, isCollected = C_MountJournal.GetMountInfoByID(mountID)
-        if (spellID) then
-            _, _, source = C_MountJournal.GetMountInfoExtraByID(mountID)
-            mounts[spellID] = {
+local function BuildMountCache()
+    local mountIds = C_MountJournal.GetMountIDs()
+    if (type(mountIds) ~= "table") then
+        return false
+    end
+
+    local cachedCount = 0
+    for _, mountId in ipairs(mountIds) do
+        local name, spellId, _, _, _, _, _, _, _, _, isCollected = C_MountJournal.GetMountInfoByID(mountId)
+        if (spellId) then
+            local _, _, source = C_MountJournal.GetMountInfoExtraByID(mountId)
+            mountCache[spellId] = {
                 source = source,
                 isCollected = isCollected,
-                mountID = mountID,
+                mountId = mountId,
                 name = name,
             }
+            cachedCount = cachedCount + 1
         end
     end
-    if (#mounts > 0) then return true end
+
+    return cachedCount > 0
 end
 
 LibEvent:attachEvent("VARIABLES_LOADED", function()
     LibSchedule:AddTask({
-        identity = "GetAllMountSource",
-        elasped  = 10,
-        begined  = GetTime() + 2,
-        expired  = GetTime() + 100,
+        identity = "TinyTooltipRemake.BuildMountCache",
+        elasped = 10,
+        begined = GetTime() + 2,
+        expired = GetTime() + 100,
         override = true,
-        onExecute = GetAllMountSource,
+        onExecute = BuildMountCache,
     })
 end)
 
-LibEvent:attachTrigger("tooltip:aura", function(self, tip, args)
-    if (args and args[2] and args[2].intVal) then
-        local spellID = args[2].intVal
-        if (mounts[spellID]) then
-            tip:AddLine(" ")
-            if (mounts[spellID].isCollected) then
-                tip:AddDoubleLine(mounts[spellID].source, L["collected"], 1, 1, 1, 0.1, 1, 0.1)
-            else
-                tip:AddLine(mounts[spellID].source, 1, 1, 1)
-            end
-            tip:Show()
-        end
+LibEvent:attachTrigger("tooltip:aura", function(self, tooltip, args)
+    local spellId = args and args[2] and args[2].intVal
+    local mountInfo = spellId and mountCache[spellId]
+    if (not mountInfo) then
+        return
     end
+
+    local sourceText = mountInfo.source
+    if (type(sourceText) ~= "string" or sourceText == "") then
+        sourceText = mountInfo.name or ""
+    end
+
+    tooltip:AddLine(" ")
+    if (mountInfo.isCollected) then
+        tooltip:AddDoubleLine(sourceText, L["collected"], 1, 1, 1, 0.1, 1, 0.1)
+    else
+        tooltip:AddLine(sourceText, 1, 1, 1)
+    end
+    tooltip:Show()
 end)

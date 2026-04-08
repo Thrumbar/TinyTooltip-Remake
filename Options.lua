@@ -40,15 +40,66 @@ local function RescaleStaticAnchorOffsets(oldScale, newScale)
     RescaleAnchorOffsets(addon.db.unit and addon.db.unit.npc and addon.db.unit.npc.anchor, ratio)
 end
 
+local LOCALE_KEY_ALIASES = {
+    ["general.announcements"] = "general.annoucements",
+    ["general.announcements.dropdown.noticeAlways"] = "general.annoucements.dropdown.noticeAlways",
+    ["general.announcements.dropdown.noticeNever"] = "general.annoucements.dropdown.noticeNever",
+    ["general.announcements.dropdown.noticeSnooze"] = "general.annoucements.dropdown.noticeSnooze",
+}
+
+local function GetLocalizedText(key)
+    if (not key) then return nil end
+    local text = rawget(addon.L or {}, key)
+    if (text ~= nil) then
+        return text
+    end
+    local aliasKey = LOCALE_KEY_ALIASES[key]
+    if (aliasKey) then
+        return rawget(addon.L or {}, aliasKey)
+    end
+end
+
+local function GetLocalizedTextWithFallback(...)
+    for i = 1, select("#", ...) do
+        local key = select(i, ...)
+        local text = GetLocalizedText(key)
+        if (text ~= nil and text ~= "") then
+            return text
+        end
+    end
+end
+
+function TinyTooltipRemake_AboutHelpURL_OnShow(self)
+    local url = self.url or ""
+    if (self:GetText() ~= url) then
+        self:SetText(url)
+    end
+end
+
+function TinyTooltipRemake_AboutHelpURL_OnTextChanged(self)
+    local url = self.url or ""
+    if (self:GetText() ~= url) then
+        self:SetText(url)
+    end
+    self:HighlightText()
+end
+
+function TinyTooltipRemake_AboutHelpURL_OnEditFocusGained(self)
+    self:HighlightText()
+end
+
+function TinyTooltipRemake_AboutHelpURL_OnEscapePressed(self)
+    self:ClearFocus()
+end
+
 -- About/Help page init
 function TinyTooltipRemake_About_OnLoad(self)
     local addonName = self.addonName or "TinyTooltip-Remake"
-    local L = self.L or (addon and addon.L) or {}
 
     local function GetText(...)
         for i = 1, select("#", ...) do
             local key = select(i, ...)
-            local value = key and L[key]
+            local value = GetLocalizedText(key)
             if value and value ~= "" then
                 return value
             end
@@ -90,7 +141,7 @@ function TinyTooltipRemake_About_OnLoad(self)
     end
 
     if self.NoticeText then
-        self.NoticeText:SetText(GetText("about.announcement.title"))
+        self.NoticeText:SetText(GetLocalizedTextWithFallback("about.announcement.title"))
     end
     if self.Notice then
         if self.Notice.SetJustifyH then self.Notice:SetJustifyH("LEFT") end
@@ -98,7 +149,7 @@ function TinyTooltipRemake_About_OnLoad(self)
     end
 
     if self.CreditsText then
-        self.CreditsText:SetText(GetText("about.credits.title"))
+        self.CreditsText:SetText(GetLocalizedTextWithFallback("about.credits.title"))
     end
     
     if self.Credits then
@@ -164,10 +215,10 @@ local function GetDropdownDisplayText(value, localePrefix, allowRawValue)
     local textKey = tostring(value)
     local text
     if (localePrefix) then
-        text = rawget(L, localePrefix .. textKey)
+        text = GetLocalizedText(localePrefix .. textKey)
     end
     if (not text) then
-        text = rawget(L, "dropdown." .. textKey)
+        text = GetLocalizedText("dropdown." .. textKey)
     end
     if (text ~= nil) then
         return text
@@ -178,17 +229,36 @@ local function GetDropdownDisplayText(value, localePrefix, allowRawValue)
     return ""
 end
 
-local function CallTrigger(keystring, value)
-    for _, tip in pairs(addon.tooltips) do
-        if (not tip) then
-        elseif (keystring == "general.mask") then
+local function ForEachTooltip(callback)
+    if (type(callback) ~= "function") then return end
+    for _, tip in pairs(addon.tooltips or {}) do
+        if (tip) then
+            callback(tip)
+        end
+    end
+end
+
+local function RefreshStatusbarValueText()
+    if (not GameTooltipStatusBar or not GameTooltipStatusBar.GetScript) then return end
+    local onValueChanged = GameTooltipStatusBar:GetScript("OnValueChanged")
+    if (onValueChanged) then
+        pcall(onValueChanged, GameTooltipStatusBar, GameTooltipStatusBar:GetValue())
+    end
+end
+
+local function ApplyTooltipStyleTrigger(keystring, value)
+    if (keystring == "general.scale") then
+        local oldScale = addon._lastScale or value
+        if (oldScale ~= value) then
+            RescaleStaticAnchorOffsets(oldScale, value)
+        end
+        addon._lastScale = value
+    end
+
+    ForEachTooltip(function(tip)
+        if (keystring == "general.mask") then
             LibEvent:trigger("tooltip.style.mask", tip, value)
         elseif (keystring == "general.scale") then
-            local oldScale = addon._lastScale or value
-            if (oldScale ~= value) then
-                RescaleStaticAnchorOffsets(oldScale, value)
-            end
-            addon._lastScale = value
             LibEvent:trigger("tooltip.scale", tip, value)
         elseif (keystring == "general.background") then
             LibEvent:trigger("tooltip.style.background", tip, unpack(value))
@@ -204,59 +274,103 @@ local function CallTrigger(keystring, value)
         elseif (keystring == "general.bgfile") then
             LibEvent:trigger("tooltip.style.bgfile", tip, value)
         end
-    end
+    end)
+end
+
+local function ApplyGeneralSettingTrigger(keystring, value)
+    ApplyTooltipStyleTrigger(keystring, value)
+
     if (keystring == "general.statusbarText") then
         LibEvent:trigger("tooltip.statusbar.text", value)
+        RefreshStatusbarValueText()
     elseif (keystring == "general.statusbarPercent") then
         LibEvent:trigger("tooltip.statusbar.text", addon.db.general.statusbarText)
-        if (GameTooltipStatusBar and GameTooltipStatusBar.GetScript) then
-            local fn = GameTooltipStatusBar:GetScript("OnValueChanged")
-            if (fn) then
-                pcall(fn, GameTooltipStatusBar, GameTooltipStatusBar:GetValue())
-            end
-        end
+        RefreshStatusbarValueText()
     elseif (keystring == "general.statusbarHide") then
         LibEvent:trigger("tooltip.statusbar.visible", value)
     elseif (keystring == "general.statusbarHeight") then
         LibEvent:trigger("tooltip.statusbar.height", value)
     elseif (keystring == "general.statusbarTexture") then
         LibEvent:trigger("tooltip.statusbar.texture", value)
+    elseif (keystring == "general.statusbarPosition" or keystring == "general.statusbarOffsetX" or keystring == "general.statusbarOffsetY") then
+        LibEvent:trigger(
+            "tooltip.statusbar.position",
+            addon.db.general.statusbarPosition,
+            addon.db.general.statusbarOffsetX,
+            addon.db.general.statusbarOffsetY
+        )
     elseif (strfind(keystring, "general.statusbarFont")) then
         LibEvent:trigger("tooltip.statusbar.font", addon.db.general.statusbarFont, addon.db.general.statusbarFontSize, addon.db.general.statusbarFontFlag)
     elseif (strfind(keystring, "general.headerFont")) then
-        LibEvent:trigger("tooltip.style.font.header", tip, addon.db.general.headerFont, addon.db.general.headerFontSize, addon.db.general.headerFontFlag)
+        LibEvent:trigger("tooltip.style.font.header", GameTooltip, addon.db.general.headerFont, addon.db.general.headerFontSize, addon.db.general.headerFontFlag)
     elseif (strfind(keystring, "general.bodyFont")) then
-        LibEvent:trigger("tooltip.style.font.body", tip, addon.db.general.bodyFont, addon.db.general.bodyFontSize, addon.db.general.bodyFontFlag)
+        LibEvent:trigger("tooltip.style.font.body", GameTooltip, addon.db.general.bodyFont, addon.db.general.bodyFontSize, addon.db.general.bodyFontFlag)
     end
+end
+
+local function CallTrigger(keystring, value)
+    ApplyGeneralSettingTrigger(keystring, value)
+end
+
+local function GetPathKeys(keystring)
+    return {strsplit(".", keystring)}
+end
+
+local function ResolveVariablePath(root, keystring, createMissing)
+    local keys = GetPathKeys(keystring)
+    local scope = root
+    local lastIndex = #keys
+    if (type(scope) ~= "table" or lastIndex == 0) then
+        return nil, nil
+    end
+
+    for index = 1, lastIndex - 1 do
+        local key = keys[index]
+        if (scope[key] == nil) then
+            if (not createMissing) then
+                return nil, nil
+            end
+            scope[key] = {}
+        end
+        if (type(scope[key]) ~= "table") then
+            if (not createMissing) then
+                return nil, nil
+            end
+            scope[key] = {}
+        end
+        scope = scope[key]
+    end
+
+    return scope, keys[lastIndex]
 end
 
 local function GetVariable(keystring, tbl)
     if (keystring == "general.SavedVariablesPerCharacter") then
-        return TinyTooltipRemakeDB.general.SavedVariablesPerCharacter
+        local general = TinyTooltipRemakeDB and TinyTooltipRemakeDB.general
+        return general and general.SavedVariablesPerCharacter
     end
-    local keys = {strsplit(".", keystring)}
-    local value = tbl or addon.db
-    for i, key in ipairs(keys) do
-        if (value[key] == nil) then return end
-        value = value[key]
+    local scope, leafKey = ResolveVariablePath(tbl or addon.db, keystring, false)
+    if (scope and leafKey) then
+        return scope[leafKey]
     end
-    return value
 end
 
 local function SetVariable(keystring, value, tbl)
-    local keys = {strsplit(".", keystring)}
-    local num = #keys
-    local tab = tbl or addon.db
-    local lastKey
-    for i, key in ipairs(keys) do
-        if (i < num) then
-            if (not tab[key]) then tab[key] = {} end
-            tab = tab[key]
-        elseif (i == num) then
-            lastKey = key
+    if (keystring == "general.SavedVariablesPerCharacter") then
+        TinyTooltipRemakeDB = TinyTooltipRemakeDB or {}
+        TinyTooltipRemakeDB.general = TinyTooltipRemakeDB.general or {}
+        TinyTooltipRemakeDB.general.SavedVariablesPerCharacter = value
+        if (addon and addon.db and addon.db.general) then
+            addon.db.general.SavedVariablesPerCharacter = value
         end
+        CallTrigger(keystring, value)
+        LibEvent:trigger("tooltip:variable:changed", keystring, value)
+        return
     end
-    tab[lastKey] = value
+
+    local scope, leafKey = ResolveVariablePath(tbl or addon.db, keystring, true)
+    if (not scope or not leafKey) then return end
+    scope[leafKey] = value
     CallTrigger(keystring, value)
     LibEvent:trigger("tooltip:variable:changed", keystring, value)
 end
@@ -455,7 +569,7 @@ function widgets:quickfocus(parent, config)
     frame.optionPanel:SetFrameLevel(frame:GetFrameLevel() + 10)
     frame.optionPanel:Hide()
 
-    local helpText = rawget(L, "quickfocus.help")
+    local helpText = GetLocalizedText("quickfocus.help")
     local function ShowHelpTooltip(owner)
         if (not helpText or helpText == "") then return end
         GameTooltip:SetOwner(owner, "ANCHOR_RIGHT")
@@ -566,7 +680,7 @@ function widgets:combatmod(parent, config)
     local parentWidth = parent and parent.anchor and parent.anchor:GetWidth()
     frame:SetSize(parentWidth or 400, LAYOUT.ROW_HEIGHT)
 
-    frame.dropdown = self:dropdown(frame, {keystring = config.keystring, dropdata = config.dropdata}, L[config.labelKeystring] or L[config.keystring])
+    frame.dropdown = self:dropdown(frame, {keystring = config.keystring, dropdata = config.dropdata}, GetLocalizedText(config.labelKeystring) or GetLocalizedText(config.keystring))
     frame.dropdown:SetPoint("LEFT", 0, 0)
 
     local function SetDropdownEnabled(enabled)
@@ -854,7 +968,7 @@ function widgets:dropdown(parent, config, labelText)
         end
     end
     UIDropDownMenu_SetSelectedValue(frame, GetVariable(config.keystring))
-    frame.Label:SetText(labelText or rawget(L, config.labelKeystring or config.keystring) or L[config.keystring] or "")
+    frame.Label:SetText(labelText or GetLocalizedText(config.labelKeystring or config.keystring) or GetLocalizedText(config.keystring) or "")
     return frame
 end
 
@@ -1504,7 +1618,7 @@ local options = {
         { keystring = "general.bgfile",             type = "dropdown", dropdata = widgets.bgfileDropdata, allowRawValue = true },
         { keystring = "general.anchor",             type = "anchor", dropdata = {"default","cursorRight","cursor","static"} },
         { keystring = "general.anchor.modifierShowInCombatKey", type = "combatmod", labelKeystring = "general.anchor.modifierShowInCombat", enableKeystring = "general.anchor.hiddenInCombat", dropdata = {"none", "alt", "ctrl", "shift"} },
-        { keystring = "general.announcementMode",   type = "dropdown", labelKeystring = "general.annoucements", localePrefix = "general.annoucements.dropdown.", dropdata = {"noticeNever", "noticeSnooze", "noticeAlways"} },
+        { keystring = "general.announcementMode",   type = "dropdown", labelKeystring = "general.announcements", localePrefix = "general.announcements.dropdown.", dropdata = {"noticeNever", "noticeSnooze", "noticeAlways"} },
         { keystring = "quest.coloredQuestBorder",   type = "checkbox" },
         { keystring = "quest.showQuestId",          type = "checkbox" },
         { keystring = "general.SavedVariablesPerCharacter",   type = "checkbox" },
@@ -2077,7 +2191,7 @@ end
 local function OnEnter(self)
     GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
     local localizedKey = "unit.player.elements." .. tostring(self.key or "")
-    local text = rawget(L, localizedKey) or rawget(L, self.key) or ""
+    local text = GetLocalizedText(localizedKey) or GetLocalizedText(self.key) or ""
     GameTooltip:SetText(text)
     GameTooltip:Show()
 end

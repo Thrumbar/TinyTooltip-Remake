@@ -22,6 +22,62 @@ local function GetLinkType(link)
     return link:match("^([^:]+):")
 end
 
+local function ResetAnchorOverride()
+    GameTooltip._tinySkipCustomAnchor = nil
+end
+
+local function HideShowingTooltip()
+    if (showingTooltip and showingTooltip.Hide) then
+        pcall(showingTooltip.Hide, showingTooltip)
+    end
+    showingTooltip = nil
+end
+
+local function ClearCurrentTooltipState()
+    HideShowingTooltip()
+    if (GameTooltip and GameTooltip.Hide) then
+        pcall(GameTooltip.Hide, GameTooltip)
+    end
+    ResetAnchorOverride()
+end
+
+local function SetTooltipOwner(frame, tooltip)
+    tooltip = tooltip or GameTooltip
+    if (not tooltip or not tooltip.SetOwner) then return end
+    GameTooltip._tinySkipCustomAnchor = true
+    pcall(tooltip.SetOwner, tooltip, frame or UIParent, "ANCHOR_CURSOR")
+end
+
+local function ShowBattlePetLink(frame, text)
+    if (not BattlePetToolTip_ShowLink or not BattlePetTooltip) then
+        return false
+    end
+    SetTooltipOwner(frame, BattlePetTooltip)
+    showingTooltip = BattlePetTooltip
+    local ok = pcall(BattlePetToolTip_ShowLink, text)
+    if (not ok) then
+        HideShowingTooltip()
+        ResetAnchorOverride()
+    end
+    return ok
+end
+
+local function ShowHyperlinkTooltip(frame, link)
+    if (not GameTooltip or not GameTooltip.SetHyperlink) then
+        return false
+    end
+    SetTooltipOwner(frame, GameTooltip)
+    showingTooltip = GameTooltip
+    local ok = pcall(GameTooltip.SetHyperlink, GameTooltip, link)
+    if (ok and GameTooltip.Show) then
+        pcall(GameTooltip.Show, GameTooltip)
+        return true
+    end
+    HideShowingTooltip()
+    ResetAnchorOverride()
+    return false
+end
+
 local function OnHyperlinkEnter(frame, link, text)
     local linkType = GetLinkType(link)
     if (linkType) then
@@ -29,42 +85,23 @@ local function OnHyperlinkEnter(frame, link, text)
     end
     if (not linkType or not supportedHyperlinkTypes[linkType]) then return end
 
-    -- Clear any previous tooltip state before showing chat-link tooltips.
-    GameTooltip:Hide()
+    ClearCurrentTooltipState()
 
-    -- All chat-link tooltips should anchor at cursor.
-    GameTooltip._tinySkipCustomAnchor = true
-    GameTooltip:SetOwner(frame or UIParent, "ANCHOR_CURSOR")
-
-    if (linkType == "battlepet" and BattlePetToolTip_ShowLink and BattlePetTooltip) then
-        showingTooltip = BattlePetTooltip
-        if (BattlePetTooltip.SetOwner) then
-            pcall(BattlePetTooltip.SetOwner, BattlePetTooltip, frame or UIParent, "ANCHOR_CURSOR")
+    if (linkType == "battlepet") then
+        if (ShowBattlePetLink(frame, text)) then
+            return
         end
-        BattlePetToolTip_ShowLink(text)
-        return
     end
 
-    showingTooltip = GameTooltip
-    local ok = pcall(GameTooltip.SetHyperlink, GameTooltip, link)
-    if (ok) then
-        GameTooltip:Show()
-    else
-        GameTooltip._tinySkipCustomAnchor = nil
-        showingTooltip = nil
-    end
+    ShowHyperlinkTooltip(frame, link)
 end
 
 local function OnHyperlinkLeave()
-    if (showingTooltip and showingTooltip.Hide) then
-        showingTooltip:Hide()
-    end
-    GameTooltip._tinySkipCustomAnchor = nil
-    showingTooltip = nil
+    ClearCurrentTooltipState()
 end
 
 local function HookChatFrame(frame)
-    if (not frame or hookedFrames[frame]) then return end
+    if (not frame or hookedFrames[frame] or not frame.HookScript) then return end
     frame:HookScript("OnHyperlinkEnter", OnHyperlinkEnter)
     frame:HookScript("OnHyperlinkLeave", OnHyperlinkLeave)
     hookedFrames[frame] = true
@@ -77,7 +114,8 @@ local function HookDefaultChatFrames()
 end
 
 local function HookCommunitiesChatFrame()
-    local frame = CommunitiesFrame and CommunitiesFrame.Chat and CommunitiesFrame.Chat.MessageFrame
+    local communities = _G.CommunitiesFrame
+    local frame = communities and communities.Chat and communities.Chat.MessageFrame
     HookChatFrame(frame)
 end
 
@@ -92,6 +130,7 @@ eventFrame:SetScript("OnEvent", function(_, event, addonName)
         end
         return
     end
+
     HookDefaultChatFrames()
     HookCommunitiesChatFrame()
 end)

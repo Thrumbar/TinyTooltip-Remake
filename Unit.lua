@@ -1,72 +1,76 @@
-
 local LibEvent = LibStub:GetLibrary("LibEvent.7000")
 
-local AFK = AFK
-local DND = DND
-local PVP = PVP
 local LEVEL = LEVEL
-local OFFLINE = FRIENDS_LIST_OFFLINE
+local PVP = PVP
 local FACTION_HORDE = FACTION_HORDE
 local FACTION_ALLIANCE = FACTION_ALLIANCE
+local TOOLTIP_DATA_POST_PROCESSOR = TooltipDataProcessor
+local TOOLTIP_DATA_TYPE_ENUM = Enum and Enum.TooltipDataType
 
 local addon = TinyTooltip
-
-local function SafeBool(fn, ...)
+local Util = addon.Util or {}
+local SafeBool = Util.SafeBool or function(fn, ...)
     local ok, value = pcall(fn, ...)
-    if (not ok) then
-        return false
+    return ok and value == true or false
+end
+local SafeCall = Util.SafeCall or function(fn, ...)
+    local ok, a, b, c, d = pcall(fn, ...)
+    if (ok) then
+        return a, b, c, d
     end
-    local okEval, result = pcall(function()
-        return value == true
-    end)
-    if (okEval) then
-        return result
+end
+local SafeConcat = Util.SafeConcat or function(values, separator)
+    return table.concat(values or {}, separator or " ")
+end
+local StripColorCodes = Util.StripColorCodes or function(text)
+    if (type(text) ~= "string") then return end
+    return strtrim((text:gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "")))
+end
+local GetTooltipLineText = Util.GetTooltipLineText or function(line)
+    if (line and line.GetText) then
+        return line:GetText()
     end
-    return false
+end
+local GetUnitGuidSafe = Util.GetUnitGuidSafe or function(unit)
+    if (SafeBool(UnitExists, unit) and UnitGUID) then
+        return SafeCall(UnitGUID, unit)
+    end
 end
 
-local function strip(text)
-    return (text:gsub("%s+([|%x%s]+)<trim>", "%1"))
+local function StripTrimMarker(text)
+    if (type(text) ~= "string") then return "" end
+    return text:gsub("%s+([|%x%s]+)<trim>", "%1")
 end
 
-local function SafeStripText(text)
-    if not text then return end
-    local ok, stripped = pcall(function()
-        if (type(text) ~= "string") then return end
-        local s = text:gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "")
-        s = strtrim(s or "")
-        if (s == "") then return end
-        return s
-    end)
-    if ok then
-        return stripped
-    end
+local function ShouldShowElement(config, elementKey)
+    return config and config.elements and config.elements[elementKey] and config.elements[elementKey].enable
 end
 
 local function FindMountAura(unit)
     if (not C_MountJournal or not C_MountJournal.GetMountFromSpell) then return end
+
     if (AuraUtil and AuraUtil.ForEachAura) then
-        local auraName, auraSpellID, mountID
+        local auraName
+        local auraSpellID
+        local mountID
         local ok = pcall(AuraUtil.ForEachAura, unit, "HELPFUL", nil, function(aura)
             if (type(aura) ~= "table" or not aura.spellId) then return end
-            local mount = C_MountJournal.GetMountFromSpell(aura.spellId)
-            if (mount) then
+            local foundMountID = C_MountJournal.GetMountFromSpell(aura.spellId)
+            if (foundMountID) then
                 auraName = aura.name
                 auraSpellID = aura.spellId
-                mountID = mount
+                mountID = foundMountID
                 return true
             end
         end)
-        if (not ok) then
-            auraName, auraSpellID, mountID = nil, nil, nil
-        end
-        if (auraSpellID) then
+        if (ok and auraSpellID) then
             return auraName, auraSpellID, mountID
         end
     end
+
     if (UnitAura) then
-        for i = 1, 40 do
-            local name, _, _, _, _, _, _, _, _, spellID = UnitAura(unit, i, "HELPFUL")
+        for index = 1, 40 do
+            local name, _, _, _, _, _, _, _, _, spellID = UnitAura(unit, index, "HELPFUL")
             if (not name) then break end
             local mountID = C_MountJournal.GetMountFromSpell(spellID)
             if (mountID) then
@@ -75,9 +79,10 @@ local function FindMountAura(unit)
         end
         return
     end
+
     if (C_UnitAuras and C_UnitAuras.GetAuraDataByIndex) then
-        for i = 1, 40 do
-            local aura = C_UnitAuras.GetAuraDataByIndex(unit, i, "HELPFUL")
+        for index = 1, 40 do
+            local aura = C_UnitAuras.GetAuraDataByIndex(unit, index, "HELPFUL")
             if (not aura) then break end
             local mountID = C_MountJournal.GetMountFromSpell(aura.spellId)
             if (mountID) then
@@ -90,117 +95,201 @@ end
 local function GetMountInfo(unit)
     if (not C_MountJournal or not C_MountJournal.GetMountInfoByID) then return end
     if (not SafeBool(UnitIsPlayer, unit)) then return end
+
     local auraName, _, mountID = FindMountAura(unit)
     if (not auraName) then return end
-    local name, isCollected
+
+    local mountName
+    local isCollected
     if (mountID) then
-        local ok, mountName, _, _, _, _, _, _, _, _, _, collected = pcall(C_MountJournal.GetMountInfoByID, mountID)
+        local ok, resolvedName, _, _, _, _, _, _, _, _, _, collected = pcall(C_MountJournal.GetMountInfoByID, mountID)
         if (ok) then
-            name = mountName
+            mountName = resolvedName
             isCollected = collected
         end
     end
-    return name or auraName, isCollected
+
+    return mountName or auraName, isCollected
 end
 
-local function SafeConcat(list, sep)
-    if (type(list) ~= "table") then return "" end
-    local out = {}
-    for i = 1, #list do
-        local v = list[i]
-        if (v ~= nil) then
-            local ok, s = pcall(function()
-                if (type(v) == "string") then return v end
-                if (type(v) == "number") then return tostring(v) end
-            end)
-            if (ok and type(s) == "string") then
-                out[#out + 1] = s
-            end
-        end
-    end
-    local ok, res = pcall(table.concat, out, sep or " ")
-    if (ok and type(res) == "string") then
-        return res
-    end
-    return ""
+local function GetLineByIndex(tip, index)
+    return _G[tip:GetName() .. "TextLeft" .. index]
 end
 
-local function HideOriginalSpecLine(tip, target)
-    if (not target or target == "") then return end
-    for i = 2, tip:NumLines() do
-        local line = _G[tip:GetName() .. "TextLeft" .. i]
-        local text = line and line:GetText()
-        local stripped = SafeStripText(text)
-        if (stripped and stripped == target) then
-                line:SetText(nil)
-                line:Show()
-        end
-    end
-end
+local function FindPreferredSpecLine(tip, className)
+    if (not tip or not className or className == "") then return end
 
-local function GetOriginalSpecLine(tip, className)
-    if (not className or className == "") then return end
-    local best, bestLen
-    for i = 2, tip:NumLines() do
-        local line = _G[tip:GetName() .. "TextLeft" .. i]
-        local text = line and line:GetText()
-        local stripped = SafeStripText(text)
-        if (stripped) then
-            local ok, match = pcall(function()
+    local bestText
+    local bestLength
+    for lineIndex = 2, tip:NumLines() do
+        local line = GetLineByIndex(tip, lineIndex)
+        local stripped = StripColorCodes(GetTooltipLineText(line))
+        if (stripped and stripped ~= "") then
+            local ok, matchesClass = pcall(function()
                 if (stripped:find("^%d")) then return false end
                 if (stripped:find("^<")) then return false end
                 return stripped:find(className, 1, true) ~= nil
             end)
-            if (ok and match) then
-                local len = #stripped
-                if (not bestLen or len < bestLen) then
-                    best = stripped
-                    bestLen = len
+            if (ok and matchesClass) then
+                local strippedLength = #stripped
+                if (not bestLength or strippedLength < bestLength) then
+                    bestText = stripped
+                    bestLength = strippedLength
                 end
             end
         end
     end
-    return best
+
+    return bestText
+end
+
+local function HideMatchingTooltipLine(tip, targetText)
+    if (not tip or not targetText or targetText == "") then return end
+
+    for lineIndex = 2, tip:NumLines() do
+        local line = GetLineByIndex(tip, lineIndex)
+        local stripped = StripColorCodes(GetTooltipLineText(line))
+        if (stripped and stripped == targetText) then
+            line:SetText(nil)
+            return true
+        end
+    end
+end
+
+local function PreserveSpecLine(tip, unit, raw)
+    local unitGuid = GetUnitGuidSafe(unit)
+    local specLine = FindPreferredSpecLine(tip, raw and raw.className)
+
+    if (specLine) then
+        raw.className = specLine
+        HideMatchingTooltipLine(tip, specLine)
+        if (unitGuid) then
+            tip._tinySpecGUID = unitGuid
+            tip._tinySpecLine = specLine
+        end
+        return
+    end
+
+    if (
+        unitGuid
+        and tip._tinySpecGUID == unitGuid
+        and type(tip._tinySpecLine) == "string"
+        and tip._tinySpecLine ~= ""
+    ) then
+        raw.className = tip._tinySpecLine
+    end
+end
+
+local function ResolvePlayerSpecIcon(unit, raw, config)
+    raw.classSpecIcon = nil
+    if (not ShouldShowElement(config, "className")) then return end
+    if (not config.elements.className.icon) then return end
+    if (not raw or type(raw.className) ~= "string" or raw.className == "") then return end
+
+    if (GetSpecialization and GetSpecializationInfo and SafeBool(UnitIsUnit, unit, "player")) then
+        local specializationIndex = GetSpecialization()
+        if (type(specializationIndex) == "number" and specializationIndex > 0) then
+            local ok, _, _, _, icon = pcall(GetSpecializationInfo, specializationIndex)
+            if (ok and icon) then
+                raw.classSpecIcon = icon
+                return
+            end
+        end
+    end
+
+    if (GetInspectSpecialization and GetSpecializationInfoByID and SafeBool(UnitIsPlayer, unit)) then
+        local okInspect, specializationID = pcall(GetInspectSpecialization, unit)
+        if (okInspect and type(specializationID) == "number" and specializationID > 0) then
+            local okSpec, _, _, _, icon = pcall(GetSpecializationInfoByID, specializationID)
+            if (okSpec and icon) then
+                raw.classSpecIcon = icon
+                return
+            end
+        end
+    end
+
+    if (GetNumSpecializationsForClassID and GetSpecializationInfoForClassID and UnitClass) then
+        local _, _, classID = UnitClass(unit)
+        if (type(classID) == "number" and classID > 0) then
+            local loweredClassLine = strlower(raw.className)
+            local specializationCount = GetNumSpecializationsForClassID(classID) or 0
+            for specializationIndex = 1, specializationCount do
+                local okSpec, _, specName, _, icon = pcall(GetSpecializationInfoForClassID, classID, specializationIndex)
+                if (okSpec and type(specName) == "string" and specName ~= "" and icon) then
+                    if (strfind(loweredClassLine, strlower(specName), 1, true)) then
+                        raw.classSpecIcon = icon
+                        return
+                    end
+                end
+            end
+        end
+    end
+end
+
+local function PopulateOptionalPlayerData(unit, raw, config)
+    raw.mountName = nil
+    raw.mountCollected = nil
+    if (ShouldShowElement(config, "mount")) then
+        raw.mountName, raw.mountCollected = GetMountInfo(unit)
+    end
+
+    if (ShouldShowElement(config, "itemLevel") and addon.RequestInspectItemLevel) then
+        if (raw.itemLevel == addon.L["unknown"]) then
+            addon:RequestInspectItemLevel(unit)
+        end
+    end
+
+    if (ShouldShowElement(config, "achievementPoints") and addon.RequestInspectAchievementPoints) then
+        if (raw.achievementPoints == addon.L["unknown"]) then
+            addon:RequestInspectAchievementPoints(unit)
+        end
+    end
 end
 
 local function ColorBorder(tip, config, raw)
     if (config.coloredBorder and addon.colorfunc[config.coloredBorder]) then
         local r, g, b = addon.colorfunc[config.coloredBorder](raw)
         LibEvent:trigger("tooltip.style.border.color", tip, r, g, b)
-    elseif (type(config.coloredBorder) == "string" and config.coloredBorder ~= "default") then
+        return
+    end
+
+    if (type(config.coloredBorder) == "string" and config.coloredBorder ~= "default") then
         local r, g, b = addon:GetRGBColor(config.coloredBorder)
         if (r and g and b) then
             LibEvent:trigger("tooltip.style.border.color", tip, r, g, b)
+            return
         end
-    else
-        LibEvent:trigger("tooltip.style.border.color", tip, unpack(addon.db.general.borderColor))
     end
+
+    LibEvent:trigger("tooltip.style.border.color", tip, unpack(addon.db.general.borderColor))
 end
 
 local function ColorBackground(tip, config, raw)
-    local bg = config.background
-    if not bg then return end
-    if (bg.colorfunc == "default" or bg.colorfunc == "" or bg.colorfunc == "inherit") then
+    local background = config.background
+    if (not background) then return end
+
+    if (background.colorfunc == "default" or background.colorfunc == "" or background.colorfunc == "inherit") then
         local r, g, b, a = unpack(addon.db.general.background)
-        a = bg.alpha or a
-        LibEvent:trigger("tooltip.style.background", tip, r, g, b, a)
+        LibEvent:trigger("tooltip.style.background", tip, r, g, b, background.alpha or a)
         return
     end
-    if (addon.colorfunc[bg.colorfunc]) then
-        local r, g, b = addon.colorfunc[bg.colorfunc](raw)
-        local a = bg.alpha or 0.8
-        LibEvent:trigger("tooltip.style.background", tip, r, g, b, a)
+
+    if (addon.colorfunc[background.colorfunc]) then
+        local r, g, b = addon.colorfunc[background.colorfunc](raw)
+        LibEvent:trigger("tooltip.style.background", tip, r, g, b, background.alpha or 0.8)
     end
 end
 
 local function GrayForDead(tip, config, unit)
-    if (config.grayForDead and SafeBool(UnitIsDeadOrGhost, unit)) then
-        local line, text
-        LibEvent:trigger("tooltip.style.border.color", tip, 0.6, 0.6, 0.6)
-        LibEvent:trigger("tooltip.style.background", tip, 0.1, 0.1, 0.1)
-        for i = 1, tip:NumLines() do
-            line = _G[tip:GetName() .. "TextLeft" .. i]
-            text = (line:GetText() or ""):gsub("|cff%x%x%x%x%x%x", "|cffaaaaaa")
+    if (not config.grayForDead or not SafeBool(UnitIsDeadOrGhost, unit)) then return end
+
+    LibEvent:trigger("tooltip.style.border.color", tip, 0.6, 0.6, 0.6)
+    LibEvent:trigger("tooltip.style.background", tip, 0.1, 0.1, 0.1)
+
+    for lineIndex = 1, tip:NumLines() do
+        local line = GetLineByIndex(tip, lineIndex)
+        if (line) then
+            local text = (GetTooltipLineText(line) or ""):gsub("|cff%x%x%x%x%x%x", "|cffaaaaaa")
             line:SetTextColor(0.7, 0.7, 0.7)
             line:SetText(text)
         end
@@ -209,94 +298,21 @@ end
 
 local function ShowBigFactionIcon(tip, config, raw)
     if (not tip or not tip.BigFactionIcon) then return end
-    if (config.elements.factionBig and config.elements.factionBig.enable and (raw.factionGroup=="Alliance" or raw.factionGroup == "Horde")) then
-        tip.BigFactionIcon:SetTexture("Interface\\Timer\\".. raw.factionGroup .."-Logo")
+
+    if (
+        config.elements.factionBig
+        and config.elements.factionBig.enable
+        and (raw.factionGroup == "Alliance" or raw.factionGroup == "Horde")
+    ) then
+        tip.BigFactionIcon:SetTexture("Interface\\Timer\\" .. raw.factionGroup .. "-Logo")
         tip.BigFactionIcon:Show()
-    else
-        tip.BigFactionIcon:Hide()
+        return
     end
+
+    tip.BigFactionIcon:Hide()
 end
 
-
-
-local function PlayerCharacter(tip, unit, config, raw)
-    local unitGuid = UnitGUID and UnitGUID(unit)
-    local specLine = GetOriginalSpecLine(tip, raw and raw.className)
-    if (specLine) then
-        raw.className = specLine
-        HideOriginalSpecLine(tip, specLine)
-        if (tip and unitGuid) then
-            tip._tinySpecGUID = unitGuid
-            tip._tinySpecLine = specLine
-        end
-    elseif (tip and raw and unitGuid and tip._tinySpecGUID == unitGuid and type(tip._tinySpecLine) == "string" and tip._tinySpecLine ~= "") then
-        -- Keep specialization text during async inspect refresh.
-        raw.className = tip._tinySpecLine
-    end
-    raw.classSpecIcon = nil
-    local classNameConfig = config and config.elements and config.elements.className
-    if (classNameConfig and classNameConfig.enable and classNameConfig.icon and raw and raw.className and raw.className ~= "") then
-        if (GetSpecialization and GetSpecializationInfo and SafeBool(UnitIsUnit, unit, "player")) then
-            local specIndex = GetSpecialization()
-            if (type(specIndex) == "number" and specIndex > 0) then
-                local okSpec, _, _, _, icon = pcall(GetSpecializationInfo, specIndex)
-                if (okSpec and icon) then
-                    raw.classSpecIcon = icon
-                end
-            end
-        end
-        if ((not raw.classSpecIcon) and GetInspectSpecialization and GetSpecializationInfoByID and SafeBool(UnitIsPlayer, unit)) then
-            local okInspect, specID = pcall(GetInspectSpecialization, unit)
-            if (okInspect and type(specID) == "number" and specID > 0) then
-                local okSpecInfo, _, _, _, icon = pcall(GetSpecializationInfoByID, specID)
-                if (okSpecInfo and icon) then
-                    raw.classSpecIcon = icon
-                end
-            end
-        end
-        if ((not raw.classSpecIcon) and GetNumSpecializationsForClassID and GetSpecializationInfoForClassID and UnitClass) then
-            local _, _, classID = UnitClass(unit)
-            if (type(classID) == "number" and classID > 0) then
-                local classLine = strlower(raw.className)
-                local specCount = GetNumSpecializationsForClassID(classID) or 0
-                for i = 1, specCount do
-                    local okSpecInfo, _, specName, _, icon = pcall(GetSpecializationInfoForClassID, classID, i)
-                    if (okSpecInfo and type(specName) == "string" and specName ~= "" and icon) then
-                        if (strfind(classLine, strlower(specName), 1, true)) then
-                            raw.classSpecIcon = icon
-                            break
-                        end
-                    end
-                end
-            end
-        end
-    end
-    raw.mountName = nil
-    raw.mountCollected = nil
-    if (config and config.elements and config.elements.mount and config.elements.mount.enable) then
-        raw.mountName, raw.mountCollected = GetMountInfo(unit)
-    end
-    if (config and config.elements and addon.RequestInspectItemLevel) then
-        local showItemLevel = (config.elements.itemLevel and config.elements.itemLevel.enable)
-        if (showItemLevel and raw and raw.itemLevel == addon.L["unknown"]) then
-            addon:RequestInspectItemLevel(unit)
-        end
-    end
-    if (config and config.elements and addon.RequestInspectAchievementPoints) then
-        local showAchievementPoints = (config.elements.achievementPoints and config.elements.achievementPoints.enable)
-        if (showAchievementPoints and raw and raw.achievementPoints == addon.L["unknown"]) then
-            addon:RequestInspectAchievementPoints(unit)
-        end
-    end
-    local data = addon:GetUnitData(unit, config.elements, raw)
-    addon:HideLines(tip, 2, 3)
-    addon:HideLine(tip, "^"..LEVEL)
-    addon:HideLine(tip, "^"..FACTION_ALLIANCE)
-    addon:HideLine(tip, "^"..FACTION_HORDE)
-    addon:HideLine(tip, "^"..PVP)
-    for i, v in ipairs(data) do
-        addon:GetLine(tip,i):SetText(strip(SafeConcat(v, " ")))
-    end
+local function ApplyUnitVisualStyle(tip, unit, config, raw)
     ColorBorder(tip, config, raw)
     ColorBackground(tip, config, raw)
     GrayForDead(tip, config, unit)
@@ -306,177 +322,231 @@ local function PlayerCharacter(tip, unit, config, raw)
     end
 end
 
-local function NonPlayerCharacter(tip, unit, config, raw)
-    local levelLine = addon:FindLine(tip, "^"..LEVEL)
-    if (levelLine or tip:NumLines() > 1) then
-        local data = addon:GetUnitData(unit, config.elements, raw)
+local function HideBaseUnitLines(tip)
+    addon:HideLine(tip, "^" .. LEVEL)
+    addon:HideLine(tip, "^" .. FACTION_ALLIANCE)
+    addon:HideLine(tip, "^" .. FACTION_HORDE)
+    addon:HideLine(tip, "^" .. PVP)
+end
+
+local function WriteTooltipDataRows(tip, dataRows, startIndex)
+    local baseIndex = tonumber(startIndex) or 1
+    for rowOffset = 1, #dataRows do
+        addon:GetLine(tip, baseIndex + rowOffset - 1):SetText(StripTrimMarker(SafeConcat(dataRows[rowOffset], " ")))
+    end
+end
+
+local function UpdatePlayerTooltip(tip, unit, config, raw)
+    PreserveSpecLine(tip, unit, raw)
+    ResolvePlayerSpecIcon(unit, raw, config)
+    PopulateOptionalPlayerData(unit, raw, config)
+
+    local dataRows = addon:GetUnitData(unit, config.elements, raw)
+    addon:HideLines(tip, 2, 3)
+    HideBaseUnitLines(tip)
+    WriteTooltipDataRows(tip, dataRows, 1)
+    ApplyUnitVisualStyle(tip, unit, config, raw)
+end
+
+local function FormatNpcTitleLine(titleLine, config, raw)
+    if (not titleLine or not config.elements.npcTitle.enable) then
+        return false
+    end
+
+    local npcTitleText = GetTooltipLineText(titleLine)
+    if (type(npcTitleText) ~= "string" or npcTitleText == "") then
+        return false
+    end
+
+    titleLine:SetText(addon:FormatData(npcTitleText, config.elements.npcTitle, raw))
+    return true
+end
+
+local function UpdateNpcTooltip(tip, unit, config, raw)
+    local hasBaseData = addon:FindLine(tip, "^" .. LEVEL) or tip:NumLines() > 1
+    if (hasBaseData) then
+        local dataRows = addon:GetUnitData(unit, config.elements, raw)
         local titleLine = addon:GetNpcTitle(tip)
-        local increase = 0
-        for i, v in ipairs(data) do
-            if (i == 1) then
-                addon:GetLine(tip,i):SetText(SafeConcat(v, " "))
-            end
-            if (i == 2) then
-                if (config.elements.npcTitle.enable and titleLine) then
-                    local npcTitleText = titleLine:GetText()
-                    if (npcTitleText and npcTitleText ~= "") then
-                        titleLine:SetText(addon:FormatData(npcTitleText, config.elements.npcTitle, raw))
-                        increase = 1
-                    end
-                end
-                i = i + increase
-                addon:GetLine(tip,i):SetText(SafeConcat(v, " "))
-            elseif ( i > 2) then
-                i = i + increase
-                addon:GetLine(tip,i):SetText(SafeConcat(v, " "))
-            end
+        local hasTitleLine = FormatNpcTitleLine(titleLine, config, raw)
+
+        if (dataRows[1]) then
+            addon:GetLine(tip, 1):SetText(SafeConcat(dataRows[1], " "))
+        end
+        if (dataRows[2]) then
+            local secondRowIndex = hasTitleLine and 3 or 2
+            addon:GetLine(tip, secondRowIndex):SetText(SafeConcat(dataRows[2], " "))
+        end
+        for rowIndex = 3, #dataRows do
+            local targetLineIndex = rowIndex + (hasTitleLine and 1 or 0)
+            addon:GetLine(tip, targetLineIndex):SetText(SafeConcat(dataRows[rowIndex], " "))
         end
     end
-    addon:HideLine(tip, "^"..LEVEL)
-    addon:HideLine(tip, "^"..PVP)
-    ColorBorder(tip, config, raw)
-    ColorBackground(tip, config, raw)
-    GrayForDead(tip, config, unit)
-    ShowBigFactionIcon(tip, config, raw)
-    addon:AutoSetTooltipWidth(tip)
+
+    addon:HideLine(tip, "^" .. LEVEL)
+    addon:HideLine(tip, "^" .. PVP)
+    ApplyUnitVisualStyle(tip, unit, config, raw)
+end
+
+local function ClearUnitTooltipState(tip)
+    if (not tip) then return end
+    tip._tinyUnitGUID = nil
+    tip._tinySpecGUID = nil
+    tip._tinySpecLine = nil
+end
+
+local function RefreshTooltipUnitState(tip, unit)
+    if (not tip) then return end
+
+    local previousGuid = tip._tinyUnitGUID
+    tip._tinyUnitGUID = GetUnitGuidSafe(unit)
+    if (previousGuid and tip._tinyUnitGUID and previousGuid ~= tip._tinyUnitGUID) then
+        tip._tinySpecGUID = nil
+        tip._tinySpecLine = nil
+    end
 end
 
 local function IsUnitTooltip(tt)
     local owner = tt and tt:GetOwner()
-    if not owner then return false end
-    
-    -- 安全访问 owner.unit
-    local ok, unit = pcall(function() return owner.unit end)
-    if (ok and unit) then return true end
-    
-    -- 安全访问 GetAttribute
-    if (owner.GetAttribute) then
-        local okAttr, attrUnit = pcall(owner.GetAttribute, owner, "unit")
-        if (okAttr and attrUnit) then return true end
+    if (not owner) then return false end
+
+    local ok, ownerUnit = pcall(function()
+        return owner.unit
+    end)
+    if (ok and ownerUnit) then
+        return true
     end
-    
+
+    if (owner.GetAttribute) then
+        local attributeUnit = SafeCall(owner.GetAttribute, owner, "unit")
+        if (attributeUnit) then
+            return true
+        end
+    end
+
     return false
 end
 
-LibEvent:attachTrigger("tooltip:unit", function(self, tip, unit)
-    if (not unit or not SafeBool(UnitExists, unit)) then return end
-    if (tip and UnitGUID) then
-        local previousGuid = tip._tinyUnitGUID
-        local okGuid, guid = pcall(UnitGUID, unit)
-        tip._tinyUnitGUID = okGuid and guid or nil
-        if (previousGuid and tip._tinyUnitGUID and previousGuid ~= tip._tinyUnitGUID) then
-            tip._tinySpecGUID = nil
-            tip._tinySpecLine = nil
-        end
-    end
-    local raw = addon:GetUnitInfo(unit)
-    if (SafeBool(UnitIsPlayer, unit)) then
-        PlayerCharacter(tip, unit, addon.db.unit.player, raw)
-    else
-        NonPlayerCharacter(tip, unit, addon.db.unit.npc, raw)
-    end
-end)
+local function ClearLineByExactText(tip, exactText)
+    if (not tip or not exactText or exactText == "") then return false end
 
-LibEvent:attachTrigger("tooltip:item, tooltip:spell, tooltip:aura, tooltip:hide, tooltip:cleared", function(self, tip)
-    if (tip) then
-        tip._tinyUnitGUID = nil
-        tip._tinySpecGUID = nil
-        tip._tinySpecLine = nil
-    end
-end)
-
-LibEvent:attachTrigger("tooltip:show", function(self, tip)
-    if (tip ~= GameTooltip) then return end
-    if (FACTION_ALLIANCE) then addon:HideLine(tip, "^" .. FACTION_ALLIANCE) end
-    if (FACTION_HORDE) then addon:HideLine(tip, "^" .. FACTION_HORDE) end
-end)
-
-local function RemoveFactionLinesPost(tip)
-    if (not tip or not tip.GetName) then return end
-    for i = 2, tip:NumLines() do
-        local line = _G[tip:GetName() .. "TextLeft" .. i]
-        local text = line and line:GetText()
-        local stripped = SafeStripText(text)
-        if (stripped and (stripped == FACTION_ALLIANCE or stripped == FACTION_HORDE)) then
-            line:SetText("")
-            --line:Hide() -- somehow not working but I will keep it in  here
-        end
-    end
-end
-
-if (TooltipDataProcessor and TooltipDataProcessor.AddTooltipPostCall and Enum and Enum.TooltipDataType) then
-    TooltipDataProcessor.AddTooltipPostCall(Enum.TooltipDataType.Unit, function(tip)
-        RemoveFactionLinesPost(tip)
-    end)
-end
-
-local function RemoveRightClickHint(tt)
     local removed = false
-    if (not tt or not tt.GetName) then return false end
-    for i = 2, tt:NumLines() do
-        local line = _G[tt:GetName() .. "TextLeft" .. i]
-        local text
-        if (line and line.GetText) then
-            local ok, value = pcall(line.GetText, line)
-            if (ok) then
-                text = value
-            end
-        end
-        if (type(text) == "string") then
-            if (issecretvalue and issecretvalue(text)) then
-                -- can't safely read/strip secret text
-            else
-                local ok, stripped = pcall(function()
-                    local s = text:gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "")
-                    return s:gsub("^%s+", ""):gsub("%s+$", "")
-                end)
-                if (ok and type(stripped) == "string") then
-                    if (UNIT_POPUP_RIGHT_CLICK and stripped == UNIT_POPUP_RIGHT_CLICK) then
-                        line:SetText("")
-                        --line:Hide()
-                        removed = true
-                    end
-                end
-            end
+    for lineIndex = 2, tip:NumLines() do
+        local line = GetLineByIndex(tip, lineIndex)
+        local stripped = StripColorCodes(GetTooltipLineText(line))
+        if (stripped and stripped == exactText) then
+            line:SetText("")
+            removed = true
         end
     end
     return removed
 end
 
-if (GameTooltip_AddInstructionLine) then
-    hooksecurefunc("GameTooltip_AddInstructionLine", function(tt, text)
-        if (not addon.db.general.hideUnitFrameHint) then return end
-        if (tt ~= GameTooltip) then return end
-        if (not IsUnitTooltip(tt)) then return end
-        -- debug output removed
-        
-        local removed = false
-        if (UNIT_POPUP_RIGHT_CLICK and text == UNIT_POPUP_RIGHT_CLICK) then
-            local i = tt:NumLines()
-            local line = _G[tt:GetName() .. "TextLeft" .. i]
-            if (line) then
-                pcall(line.SetText, line, "")
-                pcall(line.Hide, line)
-                removed = true
-            end
-            local mLine = _G[tt:GetName() .. "TextLeft" .. (i - 1)]
-            if (mLine and mLine.GetText) then
-                local okPrev, prevText = pcall(mLine.GetText, mLine)
-                if (okPrev and (not (issecretvalue and issecretvalue(prevText))) and prevText == " ") then
-                    pcall(mLine.Hide, mLine)
+local function RemoveFactionLines(tip)
+    local removedAlliance = FACTION_ALLIANCE and ClearLineByExactText(tip, FACTION_ALLIANCE)
+    local removedHorde = FACTION_HORDE and ClearLineByExactText(tip, FACTION_HORDE)
+    return removedAlliance or removedHorde
+end
+
+local function RemoveRightClickHint(tip)
+    if (not tip or not tip.GetName or not UNIT_POPUP_RIGHT_CLICK) then
+        return false
+    end
+
+    local removed = false
+    for lineIndex = 2, tip:NumLines() do
+        local line = GetLineByIndex(tip, lineIndex)
+        local text = GetTooltipLineText(line)
+        if (type(text) == "string") then
+            if (issecretvalue and issecretvalue(text)) then
+                -- cannot safely inspect secret text
+            else
+                local stripped = StripColorCodes(text)
+                if (stripped == UNIT_POPUP_RIGHT_CLICK) then
+                    line:SetText("")
+                    removed = true
                 end
             end
         end
-        if (not removed) then
-            removed = RemoveRightClickHint(tt)
+    end
+
+    return removed
+end
+
+local function HideLatestInstructionLine(tip)
+    local latestIndex = tip:NumLines()
+    local latestLine = GetLineByIndex(tip, latestIndex)
+    if (latestLine) then
+        SafeCall(latestLine.SetText, latestLine, "")
+        SafeCall(latestLine.Hide, latestLine)
+    end
+
+    local spacerLine = GetLineByIndex(tip, latestIndex - 1)
+    if (spacerLine and spacerLine.GetText) then
+        local previousText = SafeCall(spacerLine.GetText, spacerLine)
+        if (previousText == " " and not (issecretvalue and issecretvalue(previousText))) then
+            SafeCall(spacerLine.Hide, spacerLine)
         end
+    end
+end
+
+local function RemoveUnitTooltipNoise(tip)
+    local removedAny = false
+    if (RemoveFactionLines(tip)) then
+        removedAny = true
+    end
+    if (RemoveRightClickHint(tip)) then
+        removedAny = true
+    end
+    return removedAny
+end
+
+LibEvent:attachTrigger("tooltip:unit", function(self, tip, unit)
+    if (not unit or not SafeBool(UnitExists, unit)) then return end
+
+    RefreshTooltipUnitState(tip, unit)
+
+    local raw = addon:GetUnitInfo(unit)
+    if (SafeBool(UnitIsPlayer, unit)) then
+        UpdatePlayerTooltip(tip, unit, addon.db.unit.player, raw)
+    else
+        UpdateNpcTooltip(tip, unit, addon.db.unit.npc, raw)
+    end
+end)
+
+LibEvent:attachTrigger("tooltip:item, tooltip:spell, tooltip:aura, tooltip:hide, tooltip:cleared", function(self, tip)
+    ClearUnitTooltipState(tip)
+end)
+
+LibEvent:attachTrigger("tooltip:show", function(self, tip)
+    if (tip ~= GameTooltip) then return end
+    RemoveFactionLines(tip)
+end)
+
+if (TOOLTIP_DATA_POST_PROCESSOR and TOOLTIP_DATA_POST_PROCESSOR.AddTooltipPostCall and TOOLTIP_DATA_TYPE_ENUM) then
+    TOOLTIP_DATA_POST_PROCESSOR.AddTooltipPostCall(TOOLTIP_DATA_TYPE_ENUM.Unit, function(tip)
+        RemoveFactionLines(tip)
+    end)
+end
+
+if (GameTooltip_AddInstructionLine) then
+    hooksecurefunc("GameTooltip_AddInstructionLine", function(tip, text)
+        local general = addon.db and addon.db.general
+        if (not general or not general.hideUnitFrameHint) then return end
+        if (tip ~= GameTooltip) then return end
+        if (not IsUnitTooltip(tip)) then return end
+
+        if (UNIT_POPUP_RIGHT_CLICK and text == UNIT_POPUP_RIGHT_CLICK) then
+            HideLatestInstructionLine(tip)
+            return
+        end
+
+        RemoveRightClickHint(tip)
     end)
 end
 
 addon.ColorUnitBorder = ColorBorder
 addon.ColorUnitBackground = ColorBackground
 
--- Quick Focus
 local quickFocusBindingFrame = CreateFrame("Frame")
 local quickFocusActionButton = CreateFrame("Button", "TinyTooltipQuickFocusButton", UIParent, "SecureActionButtonTemplate")
 local quickFocusPendingUpdate
@@ -485,23 +555,28 @@ quickFocusActionButton:RegisterForClicks("AnyDown")
 quickFocusActionButton:SetAttribute("type1", "macro")
 quickFocusActionButton:SetAttribute("macrotext1", "/focus [@mouseover,exists]\n/clearfocus [@mouseover,noexists]")
 
+local function ResolveQuickFocusBinding()
+    local general = addon and addon.db and addon.db.general
+    local modifierKey = general and general.quickFocusModKey or "none"
+    if (modifierKey == "alt") then
+        return "ALT-BUTTON1"
+    elseif (modifierKey == "ctrl") then
+        return "CTRL-BUTTON1"
+    elseif (modifierKey == "shift") then
+        return "SHIFT-BUTTON1"
+    end
+end
+
 local function ApplyQuickFocusBinding()
     if (InCombatLockdown()) then
         quickFocusPendingUpdate = true
         return
     end
+
     quickFocusPendingUpdate = nil
     ClearOverrideBindings(quickFocusBindingFrame)
-    local general = addon and addon.db and addon.db.general
-    local mod = general and general.quickFocusModKey or "none"
-    local binding
-    if (mod == "alt") then
-        binding = "ALT-BUTTON1"
-    elseif (mod == "ctrl") then
-        binding = "CTRL-BUTTON1"
-    elseif (mod == "shift") then
-        binding = "SHIFT-BUTTON1"
-    end
+
+    local binding = ResolveQuickFocusBinding()
     if (binding and SetOverrideBindingClick) then
         SetOverrideBindingClick(quickFocusBindingFrame, true, binding, "TinyTooltipQuickFocusButton", "LeftButton")
     end

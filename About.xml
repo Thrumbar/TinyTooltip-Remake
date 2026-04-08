@@ -58,17 +58,10 @@
                 <Anchor point="RIGHT" x="-16" />
             </Anchors>
             <Scripts>
-                <OnShow>
-                    self:SetText(self.url or "")
-                </OnShow>
-                <OnTextChanged>
-                    self:SetText(self.url or "")
-                    self:HighlightText()
-                </OnTextChanged>
-                <OnEditFocusGained>
-                    self:HighlightText()
-                </OnEditFocusGained>
-                <OnEscapePressed function="EditBox_ClearFocus" />
+                <OnShow function="TinyTooltipRemake_AboutHelpURL_OnShow" />
+                <OnTextChanged function="TinyTooltipRemake_AboutHelpURL_OnTextChanged" />
+                <OnEditFocusGained function="TinyTooltipRemake_AboutHelpURL_OnEditFocusGained" />
+                <OnEscapePressed function="TinyTooltipRemake_AboutHelpURL_OnEscapePressed" />
             </Scripts>
         </EditBox>
     </Frames>

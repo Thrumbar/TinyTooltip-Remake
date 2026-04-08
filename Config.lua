@@ -1,16 +1,36 @@
 
 local addon = TinyTooltip
 
+local function CreateColorTuple(r, g, b, a)
+    return {r, g, b, a}
+end
+
+local function CreateBackgroundConfig(colorfunc, alpha)
+    return { colorfunc = colorfunc, alpha = alpha }
+end
+
+local function CreateAnchorConfig(position, modifierShowInCombatKey, returnInCombat, returnOnUnitFrame, cp, p)
+    return {
+        position = position,
+        hiddenInCombat = false,
+        modifierShowInCombatKey = modifierShowInCombatKey or "none",
+        returnInCombat = not not returnInCombat,
+        returnOnUnitFrame = not not returnOnUnitFrame,
+        cp = cp or "BOTTOM",
+        p = p or "BOTTOMRIGHT",
+    }
+end
+
 addon.db = {
     version = 2.8,
     general = {
         scale             = 1,                      --縮放
         mask              = true,                   --頂部遮罩層
         bgfile            = "rock",                 --背景
-        background        = {0, 0, 0, 0.7},         --背景顔色和透明度
+        background        = CreateColorTuple(0, 0, 0, 0.7),         --背景顔色和透明度
         borderSize        = 1,                      --邊框大小（直角邊框才生效）
         borderCorner      = "default",              --邊框類型 default|angular:直角邊框
-        borderColor       = {0.6, 0.6, 0.6, 0.8},   --邊框顔色和透明度
+        borderColor       = CreateColorTuple(0.6, 0.6, 0.6, 0.8),   --邊框顔色和透明度
         statusbarHeight   = 4,                      --HP高度
         statusbarPosition = "bottom",               --HP位置 default|bottom|top
         statusbarOffsetX  = 0,                      --HP X偏移 0:自動
@@ -22,7 +42,7 @@ addon.db = {
         statusbarHide     = false,                  --隱藏狀態條
         statusbarColor    = "auto",                 --HP顔色 default|auto|smooth
         statusbarTexture  = "Interface\\AddOns\\TinyTooltip-Remake\\texture\\StatusBar", --HP材質
-        anchor            = { position = "cursorRight", hiddenInCombat = false, modifierShowInCombatKey = "none", returnInCombat = true, returnOnUnitFrame = false, cp = "BOTTOM", p = "BOTTOMRIGHT", }, --鼠標位置 default|cursor|static|cursorRight
+        anchor            = CreateAnchorConfig("cursorRight", "none", true, false), --鼠標位置 default|cursor|static|cursorRight
         skinMoreFrames    = true,
         headerFont        = "default",
         headerFontSize    = "default",
@@ -39,8 +59,8 @@ addon.db = {
     unit = {
         player = {
             coloredBorder = "class",                --玩家邊框顔色 default|class|level|reaction|itemQuality|selection|faction|HEX
-            background = { colorfunc = "class", alpha = 0.9, },
-            anchor = { position = "inherit", hiddenInCombat = false, modifierShowInCombatKey = "global", returnInCombat = false, returnOnUnitFrame = false, cp = "BOTTOM", p = "BOTTOMRIGHT", },
+            background = CreateBackgroundConfig("class", 0.9),
+            anchor = CreateAnchorConfig("inherit", "global", false, false),
             showTarget = true,                      --顯示目標
             showTargetBy = true,                    --顯示被關注
             showModel = true,                       --顯示模型
@@ -88,12 +108,12 @@ addon.db = {
         },
         npc = {
             coloredBorder = "reaction",
-            background = { colorfunc = "default", alpha = 0.9, },
+            background = CreateBackgroundConfig("default", 0.9),
             showTarget = true,
             showTargetBy = true,
             grayForDead = false,
             showModel = true,
-            anchor = { position = "inherit", hiddenInCombat = false, modifierShowInCombatKey = "global", returnInCombat = false, returnOnUnitFrame = false, cp = "BOTTOM", p = "BOTTOMRIGHT", },
+            anchor = CreateAnchorConfig("inherit", "global", false, false),
             elements = {
                 factionBig   = { enable = false, filter = "none" },
                 raidIcon     = { enable = true,  filter = "none" },
@@ -126,8 +146,8 @@ addon.db = {
         showItemExpansion = true,
     },
     spell = {
-        borderColor = {0.6, 0.6, 0.6, 0.8},
-        background = {0, 0, 0, 0.8},
+        borderColor = CreateColorTuple(0.6, 0.6, 0.6, 0.8),
+        background = CreateColorTuple(0, 0, 0, 0.8),
         modifierShowAll = false,
         showIcon = true,
         showSpellId = true,

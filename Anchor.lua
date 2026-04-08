@@ -1,10 +1,21 @@
-
 local LibEvent = LibStub:GetLibrary("LibEvent.7000")
 local LibSchedule = LibStub:GetLibrary("LibSchedule.7000")
 
 local GetMouseFocus = GetMouseFocus or GetMouseFoci
 
 local addon = TinyTooltip
+local Util = addon.Util or {}
+local SafeBool = Util.SafeBool or function(fn, ...)
+    local ok, value = pcall(fn, ...)
+    return ok and value == true or false
+end
+local SafeCall = Util.SafeCall or function(fn, ...)
+    local ok, a, b, c = pcall(fn, ...)
+    if (ok) then
+        return a, b, c
+    end
+end
+
 local modifierStateOverrideKey
 local modifierStateOverrideDown
 local dbGeneralAnchor
@@ -19,13 +30,10 @@ local function CacheAnchorSetting()
         dbNpcAnchor = nil
         return
     end
-    local general = db.general
-    local unit = db.unit
-    dbGeneralAnchor = general and general.anchor
-    local player = unit and unit.player
-    local npc = unit and unit.npc
-    dbPlayerAnchor = player and player.anchor
-    dbNpcAnchor = npc and npc.anchor
+
+    dbGeneralAnchor = db.general and db.general.anchor
+    dbPlayerAnchor = db.unit and db.unit.player and db.unit.player.anchor
+    dbNpcAnchor = db.unit and db.unit.npc and db.unit.npc.anchor
 end
 
 local function IsConfiguredModifierDown(modifierKey)
@@ -57,120 +65,207 @@ local function ShouldHideInCombat(anchor)
     if (not anchor or not anchor.hiddenInCombat or not InCombatLockdown()) then
         return false
     end
+
     local modifierKey = GetAnchorModifierKey(anchor)
     if (modifierKey ~= "none" and IsConfiguredModifierDown(modifierKey)) then
         return false
     end
+
     return true
 end
 
-local function SafeSetOwner(frame, parent, anchor, ...)
+local function SafeSetOwner(frame, parent, anchorType, ...)
+    if (not frame or not frame.SetOwner) then return end
     if (not parent or type(parent) ~= "table") then
         parent = UIParent
     end
-    pcall(frame.SetOwner, frame, parent, anchor, ...)
+    pcall(frame.SetOwner, frame, parent, anchorType, ...)
 end
 
-local function AnchorCursorOnExecute(self)
-    if (not self.tip:IsShown()) then return true end
-    local anchorType = self.tip:GetAnchorType()
-    if (anchorType ~= "ANCHOR_CURSOR" and anchorType ~= "ANCHOR_NONE") then return true end
-    local x, y = GetCursorPosition()
-    self.tip:ClearAllPoints()
-    self.tip:SetPoint(self.cp, UIParent, "BOTTOMLEFT", floor(x/self.scale+self.cx), floor(y/self.scale+self.cy))
+local function IsStaticAnchorPosition(anchor)
+    return anchor and anchor.position == "static"
 end
 
-local function AnchorCursor(tip, parent, cp, cx, cy)
-    local x, y = GetCursorPosition()
+local function ResolveStaticAnchor(anchor)
+    if (not anchor) then
+        return dbGeneralAnchor
+    end
+    if (anchor.position == "inherit") then
+        return dbGeneralAnchor
+    end
+    return anchor
+end
+
+local function AnchorCursorOnExecute(task)
+    if (not task.tip or not task.tip:IsShown()) then
+        return true
+    end
+
+    local anchorType = task.tip:GetAnchorType()
+    if (anchorType ~= "ANCHOR_CURSOR" and anchorType ~= "ANCHOR_NONE") then
+        return true
+    end
+
+    local cursorX, cursorY = GetCursorPosition()
+    task.tip:ClearAllPoints()
+    task.tip:SetPoint(
+        task.point,
+        UIParent,
+        "BOTTOMLEFT",
+        floor(cursorX / task.scale + task.offsetX),
+        floor(cursorY / task.scale + task.offsetY)
+    )
+end
+
+local function StartCursorAnchorTracking(tip, point, offsetX, offsetY)
+    local cursorX, cursorY = GetCursorPosition()
     local scale = tip:GetEffectiveScale()
-    cp, cx, cy = cp or "BOTTOM", cx or 0, cy or 20
+
     tip:ClearAllPoints()
-    tip:SetPoint(cp, UIParent, "BOTTOMLEFT", floor(x/scale+cx), floor(y/scale+cy))
+    tip:SetPoint(point, UIParent, "BOTTOMLEFT", floor(cursorX / scale + offsetX), floor(cursorY / scale + offsetY))
+
     LibSchedule:AddTask({
         identity = tostring(tip),
-        elasped  = 0.01,
-        expired  = GetTime() + 300,
+        elasped = 0.01,
+        expired = GetTime() + 300,
         override = true,
-        tip      = tip,
-        cp       = cp,
-        cx       = cx,
-        cy       = cy,
-        scale    = scale,
+        tip = tip,
+        point = point,
+        offsetX = offsetX,
+        offsetY = offsetY,
+        scale = scale,
         onExecute = AnchorCursorOnExecute,
     })
 end
 
-local function AnchorDefaultPosition(tip, parent, anchor, finally)
-    if (finally) then
-        LibEvent:trigger("tooltip.anchor.static", tip, parent, anchor.x, anchor.y)
-    elseif (anchor.position == "inherit") then
-        AnchorDefaultPosition(tip, parent, dbGeneralAnchor, true)
-    else
-        LibEvent:trigger("tooltip.anchor.static", tip, parent, anchor.x, anchor.y, anchor.p)
-    end
+local function ApplyDefaultAnchor(tip, parent, anchor)
+    local resolvedAnchor = ResolveStaticAnchor(anchor)
+    if (not resolvedAnchor) then return end
+    LibEvent:trigger("tooltip.anchor.static", tip, parent, resolvedAnchor.x, resolvedAnchor.y, resolvedAnchor.p)
 end
 
-local function AnchorFrame(tip, parent, anchor, isUnitFrame, finally, combatAnchor)
+local function ResolveCombatAnchorRule(anchor, combatAnchor)
     local hideAnchor = combatAnchor or anchor
-    if (hideAnchor and hideAnchor ~= dbGeneralAnchor and not hideAnchor.hiddenInCombat and not hideAnchor.returnInCombat and not hideAnchor.returnOnUnitFrame) then
+    if (
+        hideAnchor
+        and hideAnchor ~= dbGeneralAnchor
+        and not hideAnchor.hiddenInCombat
+        and not hideAnchor.returnInCombat
+        and not hideAnchor.returnOnUnitFrame
+    ) then
         hideAnchor = dbGeneralAnchor
     end
+    return hideAnchor
+end
+
+local function AnchorFrame(tip, parent, anchor, isUnitFrame, combatAnchor)
+    if (not tip) then return end
+
+    local activeAnchor = anchor or dbGeneralAnchor
+    local hideAnchor = ResolveCombatAnchorRule(activeAnchor, combatAnchor)
     if (ShouldHideInCombat(hideAnchor)) then
         return LibEvent:trigger("tooltip.anchor.none", tip, parent)
     end
-    if (not anchor) then return end
-    if (hideAnchor and hideAnchor.returnInCombat and InCombatLockdown()) then return AnchorDefaultPosition(tip, parent, hideAnchor, finally) end
-    if (hideAnchor and hideAnchor.returnOnUnitFrame and isUnitFrame) then return AnchorDefaultPosition(tip, parent, hideAnchor, finally) end
-    if (anchor.position == "cursorRight") then
+    if (not activeAnchor) then return end
+
+    if (hideAnchor and hideAnchor.returnInCombat and InCombatLockdown()) then
+        return ApplyDefaultAnchor(tip, parent, hideAnchor)
+    end
+    if (hideAnchor and hideAnchor.returnOnUnitFrame and isUnitFrame) then
+        return ApplyDefaultAnchor(tip, parent, hideAnchor)
+    end
+
+    if (activeAnchor.position == "cursorRight") then
         LibEvent:trigger("tooltip.anchor.cursor.right", tip, parent)
-    elseif (anchor.position == "cursor") then
-        local offsetX = tonumber(anchor.cx) or 0
-        local offsetY = tonumber(anchor.cy) or 0
-        local point = anchor.cp
-        if (offsetX == 0 and offsetY == 0 and (not point or point == "BOTTOM")) then
+        return
+    end
+
+    if (activeAnchor.position == "cursor") then
+        local offsetX = tonumber(activeAnchor.cx) or 0
+        local offsetY = tonumber(activeAnchor.cy) or 0
+        local point = activeAnchor.cp or "BOTTOM"
+        if (offsetX == 0 and offsetY == 0 and point == "BOTTOM") then
             LibEvent:trigger("tooltip.anchor.cursor", tip, parent)
         else
             SafeSetOwner(tip, parent, "ANCHOR_CURSOR")
-            AnchorCursor(tip, parent, point, offsetX, offsetY)
+            StartCursorAnchorTracking(tip, point, offsetX, offsetY)
         end
-    elseif (anchor.position == "inherit" and not finally) then
-        AnchorFrame(tip, parent, dbGeneralAnchor, isUnitFrame, true, hideAnchor)
-    elseif (anchor.position == "static") then
-        LibEvent:trigger("tooltip.anchor.static", tip, parent, anchor.x, anchor.y, anchor.p)
+        return
+    end
+
+    if (activeAnchor.position == "inherit") then
+        return ApplyDefaultAnchor(tip, parent, activeAnchor)
+    end
+
+    if (IsStaticAnchorPosition(activeAnchor)) then
+        LibEvent:trigger("tooltip.anchor.static", tip, parent, activeAnchor.x, activeAnchor.y, activeAnchor.p)
     end
 end
 
-local function GetMouseoverContext()
-    local unit
+local function GetFocusedUnit()
     local focus = GetMouseFocus()
-    local isUnitFrame = false
-    if (focus and focus.unit) then
-        unit = focus.unit
-        isUnitFrame = true
-    end
-    if (not unit and focus and focus.GetAttribute) then
-        unit = focus:GetAttribute("unit")
-    end
-    if (not unit) then
-        unit = "mouseover"
+    if (not focus) then
+        return "mouseover", false
     end
 
-    local anchor
-    if (UnitIsPlayer(unit)) then
-        anchor = dbPlayerAnchor
-    elseif (UnitExists(unit)) then
-        anchor = dbNpcAnchor
-    else
-        anchor = dbGeneralAnchor
+    local directUnit = SafeCall(function(frame)
+        return frame.unit
+    end, focus)
+    if (directUnit) then
+        return directUnit, true
     end
-    local combatAnchor = anchor
-    if (anchor and anchor.position == "inherit") then
-        anchor = dbGeneralAnchor
+
+    if (focus.GetAttribute) then
+        local attributeUnit = SafeCall(focus.GetAttribute, focus, "unit")
+        if (attributeUnit) then
+            return attributeUnit, true
+        end
+    end
+
+    return "mouseover", false
+end
+
+local function GetContextualAnchor(unit)
+    if (SafeBool(UnitIsPlayer, unit)) then
+        return dbPlayerAnchor or dbGeneralAnchor
+    end
+    if (SafeBool(UnitExists, unit)) then
+        return dbNpcAnchor or dbGeneralAnchor
+    end
+    return dbGeneralAnchor
+end
+
+local function GetMouseoverContext()
+    local unit, isUnitFrame = GetFocusedUnit()
+    local combatAnchor = GetContextualAnchor(unit)
+    local activeAnchor = combatAnchor
+    if (activeAnchor and activeAnchor.position == "inherit") then
+        activeAnchor = dbGeneralAnchor
     end
     if (not combatAnchor) then
-        combatAnchor = anchor
+        combatAnchor = activeAnchor
     end
-    return unit, isUnitFrame, anchor, combatAnchor
+    return unit, isUnitFrame, activeAnchor, combatAnchor
+end
+
+local function IsModifierStateMatch(modifierKey, changedKey)
+    local normalizedKey = changedKey and strupper(changedKey)
+    if (modifierKey == "alt") then
+        return normalizedKey == "LALT" or normalizedKey == "RALT" or normalizedKey == "ALT"
+    elseif (modifierKey == "ctrl") then
+        return normalizedKey == "LCTRL" or normalizedKey == "RCTRL" or normalizedKey == "CTRL"
+    elseif (modifierKey == "shift") then
+        return normalizedKey == "LSHIFT" or normalizedKey == "RSHIFT" or normalizedKey == "SHIFT"
+    end
+    return false
+end
+
+local function RefreshTooltipForModifier(unit)
+    if (unit == "mouseover" and GameTooltip.SetMouseoverUnit) then
+        pcall(GameTooltip.SetMouseoverUnit, GameTooltip)
+        return
+    end
+    pcall(GameTooltip.SetUnit, GameTooltip, unit)
 end
 
 LibEvent:attachTrigger("tooltip:anchor", function(self, tip, parent)
@@ -179,49 +274,39 @@ LibEvent:attachTrigger("tooltip:anchor", function(self, tip, parent)
         tip._tinySkipCustomAnchor = nil
         return
     end
-    local _, isUnitFrame, anchor, combatAnchor = GetMouseoverContext()
-    AnchorFrame(tip, parent, anchor, isUnitFrame, nil, combatAnchor)
+
+    local _, isUnitFrame, activeAnchor, combatAnchor = GetMouseoverContext()
+    AnchorFrame(tip, parent, activeAnchor, isUnitFrame, combatAnchor)
 end)
 
 local modifierWatcher = CreateFrame("Frame")
 modifierWatcher:RegisterEvent("MODIFIER_STATE_CHANGED")
 modifierWatcher:SetScript("OnEvent", function(_, _, key, state)
     if (not InCombatLockdown()) then return end
-    local unit, isUnitFrame, anchor, combatAnchor = GetMouseoverContext()
-    local ruleAnchor = combatAnchor
-    if (ruleAnchor and ruleAnchor ~= dbGeneralAnchor and not ruleAnchor.hiddenInCombat and not ruleAnchor.returnInCombat and not ruleAnchor.returnOnUnitFrame) then
-        ruleAnchor = dbGeneralAnchor
-    end
-    if (not UnitExists(unit) or not ruleAnchor or not ruleAnchor.hiddenInCombat) then return end
-    local modifierKey = GetAnchorModifierKey(ruleAnchor)
-    if (modifierKey == "none") then return end
 
-    local isDown = tonumber(state) == 1
-    key = key and strupper(key)
-    if (modifierKey == "alt") then
-        if (key ~= "LALT" and key ~= "RALT" and key ~= "ALT") then return end
-    elseif (modifierKey == "ctrl") then
-        if (key ~= "LCTRL" and key ~= "RCTRL" and key ~= "CTRL") then return end
-    elseif (modifierKey == "shift") then
-        if (key ~= "LSHIFT" and key ~= "RSHIFT" and key ~= "SHIFT") then return end
-    else
+    local unit, isUnitFrame, activeAnchor, combatAnchor = GetMouseoverContext()
+    local ruleAnchor = ResolveCombatAnchorRule(activeAnchor, combatAnchor)
+    if (not SafeBool(UnitExists, unit) or not ruleAnchor or not ruleAnchor.hiddenInCombat) then return end
+
+    local modifierKey = GetAnchorModifierKey(ruleAnchor)
+    if (modifierKey == "none" or not IsModifierStateMatch(modifierKey, key)) then
         return
     end
 
+    local isDown = tonumber(state) == 1
     modifierStateOverrideKey = modifierKey
     modifierStateOverrideDown = isDown
-    AnchorFrame(GameTooltip, GameTooltip:GetOwner() or UIParent, anchor, isUnitFrame, nil, ruleAnchor)
+
+    AnchorFrame(GameTooltip, GameTooltip:GetOwner() or UIParent, activeAnchor, isUnitFrame, ruleAnchor)
+
     local shouldHide = ShouldHideInCombat(ruleAnchor)
     if (isDown) then
-        if (unit == "mouseover" and GameTooltip.SetMouseoverUnit) then
-            pcall(GameTooltip.SetMouseoverUnit, GameTooltip)
-        else
-            pcall(GameTooltip.SetUnit, GameTooltip, unit)
-        end
+        RefreshTooltipForModifier(unit)
     end
     if (not shouldHide and not GameTooltip:IsShown()) then
         GameTooltip:Show()
     end
+
     modifierStateOverrideKey = nil
     modifierStateOverrideDown = nil
 end)
@@ -230,4 +315,3 @@ CacheAnchorSetting()
 LibEvent:attachTrigger("tooltip:variables:loaded, tooltip:variable:changed", function()
     CacheAnchorSetting()
 end)
-

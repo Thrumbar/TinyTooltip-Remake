@@ -38,6 +38,82 @@ local C_BattleNet_GetAccountInfoByGUID = C_BattleNet and C_BattleNet.GetAccountI
 
 local addon = TinyTooltip
 
+addon.Util = addon.Util or {}
+local Util = addon.Util
+
+function Util.SafeCall(fn, ...)
+    if (type(fn) ~= "function") then return end
+    local ok, a, b, c, d, e, f, g, h, i, j = pcall(fn, ...)
+    if (ok) then
+        return a, b, c, d, e, f, g, h, i, j
+    end
+end
+
+function Util.SafeBool(fn, ...)
+    local value = Util.SafeCall(fn, ...)
+    local okEval, result = pcall(function()
+        return value == true
+    end)
+    if (okEval) then
+        return result
+    end
+    return false
+end
+
+function Util.GetTooltipLeftLine(tooltip, lineIndex)
+    if (not tooltip or not tooltip.GetName or type(lineIndex) ~= "number") then return end
+    return _G[tooltip:GetName() .. "TextLeft" .. lineIndex]
+end
+
+function Util.GetTooltipRightLine(tooltip, lineIndex)
+    if (not tooltip or not tooltip.GetName or type(lineIndex) ~= "number") then return end
+    return _G[tooltip:GetName() .. "TextRight" .. lineIndex]
+end
+
+function Util.GetTooltipLineText(line)
+    if (not line or not line.GetText) then return end
+    local text = Util.SafeCall(line.GetText, line)
+    if (type(text) == "string") then
+        return text
+    end
+end
+
+function Util.StripColorCodes(text)
+    if (type(text) ~= "string") then return end
+    local stripped = text:gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "")
+    stripped = strtrim(stripped or "")
+    if (stripped ~= "") then
+        return stripped
+    end
+end
+
+function Util.SafeConcat(values, separator)
+    if (type(values) ~= "table") then return "" end
+    local output = {}
+    for index = 1, #values do
+        local value = values[index]
+        if (type(value) == "string") then
+            output[#output + 1] = value
+        elseif (type(value) == "number") then
+            output[#output + 1] = tostring(value)
+        end
+    end
+    local ok, result = pcall(table.concat, output, separator or " ")
+    if (ok and type(result) == "string") then
+        return result
+    end
+    return ""
+end
+
+function Util.GetUnitGuidSafe(unit)
+    if (not unit or not UnitExists or not UnitGUID) then return end
+    if (not Util.SafeBool(UnitExists, unit)) then return end
+    local guid = Util.SafeCall(UnitGUID, unit)
+    if (guid) then
+        return guid
+    end
+end
+
 local function ResolveSpellIdFromSpellToken(spellToken)
     if (type(spellToken) == "number") then
         return spellToken
