@@ -70,19 +70,35 @@ function Util.GetTooltipRightLine(tooltip, lineIndex)
     return _G[tooltip:GetName() .. "TextRight" .. lineIndex]
 end
 
+function Util.CanAccessValue(value)
+    if (value == nil) then return false end
+    if (issecretvalue and issecretvalue(value)) then
+        if (canaccessvalue) then
+            local ok, result = pcall(canaccessvalue, value)
+            return ok and result == true
+        end
+        return false
+    end
+    return true
+end
+
 function Util.GetTooltipLineText(line)
     if (not line or not line.GetText) then return end
     local text = Util.SafeCall(line.GetText, line)
-    if (type(text) == "string") then
+    if (type(text) == "string" and Util.CanAccessValue(text)) then
         return text
     end
 end
 
 function Util.StripColorCodes(text)
-    if (type(text) ~= "string") then return end
-    local stripped = text:gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "")
-    stripped = strtrim(stripped or "")
-    if (stripped ~= "") then
+    if (type(text) ~= "string" or not Util.CanAccessValue(text)) then return end
+    local ok, stripped = pcall(function()
+        local value = string.gsub(text, "|c%x%x%x%x%x%x%x%x", "")
+        value = string.gsub(value, "|r", "")
+        value = strtrim(value or "")
+        return value
+    end)
+    if (ok and stripped ~= "") then
         return stripped
     end
 end
@@ -1058,13 +1074,23 @@ end
 
 -- 頭銜 @param2:true為前綴
 function addon:GetTitle(name, pvpName)
-    if (not pvpName) then return end
-    if (name == pvpName) then return end
-    local pos = string.find(pvpName, name)
-    local title = pvpName:gsub(name, "", 1)
-    title = title:gsub(",", ""):gsub("，", "")
-    title = strtrim(title)
-    return title, pos ~= 1
+    if (type(name) ~= "string" or type(pvpName) ~= "string") then return end
+    if (Util.CanAccessValue and (not Util.CanAccessValue(name) or not Util.CanAccessValue(pvpName))) then
+        return
+    end
+
+    local ok, title, pos = pcall(function()
+        if (name == pvpName) then return end
+        local found = string.find(pvpName, name, 1, true)
+        local value = string.gsub(pvpName, name, "", 1)
+        value = string.gsub(value, ",", "")
+        value = string.gsub(value, "，", "")
+        value = strtrim(value)
+        return value, found
+    end)
+    if (ok and type(title) == "string" and title ~= "") then
+        return title, pos ~= 1
+    end
 end
 
 -- 性別
@@ -1085,19 +1111,29 @@ end
 
 --地區
 function addon:GetZone(unit, unitname, realm)
-    if not IsInGroup() then return end
+    if (not IsInGroup()) then return end
     local t, i = string.match(unit, "(.-)(%d+)")
     if (i and t == "raid") then
         return select(7, GetRaidRosterInfo(i))
     elseif (i and t == "party") then
         local name, zone
-        local fullname = unitname .. "-" .. realm
+        local fullname
+        if (type(unitname) == "string" and type(realm) == "string") then
+            local canUseName = not Util.CanAccessValue or Util.CanAccessValue(unitname)
+            local canUseRealm = not Util.CanAccessValue or Util.CanAccessValue(realm)
+            if (canUseName and canUseRealm) then
+                fullname = format("%s-%s", unitname, realm)
+            end
+        end
+
         for j = 1, 5 do
             name, _, _, _, _, _, zone = GetRaidRosterInfo(j)
-            if (name and not string.find(name, "-") and name == unitname) then
-                return zone
-            elseif (name and string.find(name, "-") and name == fullname) then
-                return zone
+            if (type(name) == "string" and (not Util.CanAccessValue or Util.CanAccessValue(name))) then
+                if (type(unitname) == "string" and (not Util.CanAccessValue or Util.CanAccessValue(unitname)) and not string.find(name, "-", 1, true) and name == unitname) then
+                    return zone
+                elseif (fullname and string.find(name, "-", 1, true) and name == fullname) then
+                    return zone
+                end
             end
         end
     end

@@ -24,7 +24,15 @@ local SafeConcat = Util.SafeConcat or function(values, separator)
 end
 local StripColorCodes = Util.StripColorCodes or function(text)
     if (type(text) ~= "string") then return end
-    return strtrim((text:gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "")))
+    if (issecretvalue and issecretvalue(text) and not (canaccessvalue and canaccessvalue(text))) then return end
+    local ok, value = pcall(function()
+        local stripped = string.gsub(text, "|c%x%x%x%x%x%x%x%x", "")
+        stripped = string.gsub(stripped, "|r", "")
+        return strtrim(stripped)
+    end)
+    if (ok and value ~= "") then
+        return value
+    end
 end
 local GetTooltipLineText = Util.GetTooltipLineText or function(line)
     if (line and line.GetText) then
@@ -39,7 +47,14 @@ end
 
 local function StripTrimMarker(text)
     if (type(text) ~= "string") then return "" end
-    return text:gsub("%s+([|%x%s]+)<trim>", "%1")
+    if (issecretvalue and issecretvalue(text) and not (canaccessvalue and canaccessvalue(text))) then
+        return ""
+    end
+    local ok, value = pcall(string.gsub, text, "%s+([|%x%s]+)<trim>", "%1")
+    if (ok and type(value) == "string") then
+        return value
+    end
+    return ""
 end
 
 local function ShouldShowElement(config, elementKey)
@@ -289,9 +304,14 @@ local function GrayForDead(tip, config, unit)
     for lineIndex = 1, tip:NumLines() do
         local line = GetLineByIndex(tip, lineIndex)
         if (line) then
-            local text = (GetTooltipLineText(line) or ""):gsub("|cff%x%x%x%x%x%x", "|cffaaaaaa")
-            line:SetTextColor(0.7, 0.7, 0.7)
-            line:SetText(text)
+            local text = GetTooltipLineText(line)
+            if (type(text) == "string") then
+                local ok, grayText = pcall(string.gsub, text, "|cff%x%x%x%x%x%x", "|cffaaaaaa")
+                line:SetTextColor(0.7, 0.7, 0.7)
+                if (ok and type(grayText) == "string") then
+                    line:SetText(grayText)
+                end
+            end
         end
     end
 end
@@ -483,7 +503,7 @@ local function HideLatestInstructionLine(tip)
     local spacerLine = GetLineByIndex(tip, latestIndex - 1)
     if (spacerLine and spacerLine.GetText) then
         local previousText = SafeCall(spacerLine.GetText, spacerLine)
-        if (previousText == " " and not (issecretvalue and issecretvalue(previousText))) then
+        if (type(previousText) == "string" and not (issecretvalue and issecretvalue(previousText)) and previousText == " ") then
             SafeCall(spacerLine.Hide, spacerLine)
         end
     end
@@ -535,7 +555,7 @@ if (GameTooltip_AddInstructionLine) then
         if (tip ~= GameTooltip) then return end
         if (not IsUnitTooltip(tip)) then return end
 
-        if (UNIT_POPUP_RIGHT_CLICK and text == UNIT_POPUP_RIGHT_CLICK) then
+        if (type(text) == "string" and not (issecretvalue and issecretvalue(text)) and UNIT_POPUP_RIGHT_CLICK and text == UNIT_POPUP_RIGHT_CLICK) then
             HideLatestInstructionLine(tip)
             return
         end

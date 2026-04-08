@@ -60,9 +60,12 @@ local function PrependItemIcon(tooltip, itemInfo)
 
     local texture = itemInfo and itemInfo.itemTexture
     local line = addon:GetLine(tooltip, 1)
-    local text = line and line:GetText()
-    if (texture and type(text) == "string" and not strfind(text, "^|T")) then
-        line:SetFormattedText("|T%s:16:16:0:0:32:32:2:30:2:30|t %s", texture, text)
+    local text = Util.GetTooltipLineText and Util.GetTooltipLineText(line) or (line and line:GetText())
+    if (texture and type(text) == "string") then
+        local ok, hasIcon = pcall(strfind, text, "^|T")
+        if (not ok or not hasIcon) then
+            line:SetFormattedText("|T%s:16:16:0:0:32:32:2:30:2:30|t %s", texture, text)
+        end
     end
 end
 
@@ -77,7 +80,7 @@ local function AppendStackCount(tooltip, itemInfo)
     end
 
     local line = addon:GetLine(tooltip, 1)
-    local text = line and line:GetText()
+    local text = Util.GetTooltipLineText and Util.GetTooltipLineText(line) or (line and line:GetText())
     if (type(text) ~= "string" or text == "") then
         return
     end
